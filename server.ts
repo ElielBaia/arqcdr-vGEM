@@ -22,22 +22,55 @@ async function startServer() {
     res.json({ status: "ok", message: "Semantic Engine Online" });
   });
 
-  // Briefing Parsing via Gemini AI
+  // Briefing Parsing via Gemini AI + ARQCdR Interpreter
   app.post("/api/projects/from-briefing", async (req, res) => {
     try {
       const { prompt } = req.body;
       if (!prompt) return res.status(400).json({ error: "Missing prompt" });
-      
-      console.log(`[BIMCompiler] Received briefing, invoking Gemini...`);
-      const { parseBriefingToPBIM } = await import("./src/lib/ai_agents/gemini_agent");
-      const pbimModel = await parseBriefingToPBIM(prompt);
-      console.log(`[BIMCompiler] Generation complete. Schema version: ${pbimModel.schema_version}`);
-      
-      currentProjectState = pbimModel;
-      res.json(pbimModel);
+
+      console.log(`[BIMCompiler] Received briefing, running ARQCdR interpreter + Gemini...`);
+      const { parseBriefingToPBIMEnriched } = await import("./src/lib/ai_agents/gemini_agent");
+      const enriched = await parseBriefingToPBIMEnriched(prompt);
+      console.log(`[BIMCompiler] Pattern detected: ${enriched.interpreter.pattern}; validation: ${enriched.validation.status}`);
+
+      currentProjectState = enriched.project;
+      // ARQCdR: PBIM + camada semantica do interpretador
+      res.json({
+        ...enriched.project,
+        _arqcdr: {
+          interpreter: enriched.interpreter,
+          validation: enriched.validation,
+        },
+      });
     } catch (error: any) {
       console.error("[BIMCompiler Error]:", error);
       res.status(500).json({ error: error.message || "Failed to generate project model" });
+    }
+  });
+
+  // Validacao NBR isolada (sem chamar Gemini)
+  app.post("/api/projects/validate", async (req, res) => {
+    try {
+      const { project } = req.body;
+      if (!project) return res.status(400).json({ error: "Missing project" });
+      const { validateProject } = await import("./src/lib/interpreter/validator");
+      res.json(validateProject(project));
+    } catch (error: any) {
+      console.error("[Validator Error]:", error);
+      res.status(500).json({ error: error.message || "Failed to validate" });
+    }
+  });
+
+  // Interpreter isolado - ve o que o sistema entendeu do prompt
+  app.post("/api/projects/interpret", async (req, res) => {
+    try {
+      const { prompt } = req.body;
+      if (!prompt) return res.status(400).json({ error: "Missing prompt" });
+      const { buildInvariantSet } = await import("./src/lib/interpreter/decoder");
+      res.json(buildInvariantSet(prompt));
+    } catch (error: any) {
+      console.error("[Interpreter Error]:", error);
+      res.status(500).json({ error: error.message || "Failed to interpret" });
     }
   });
 

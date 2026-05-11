@@ -2,6 +2,17 @@ import dotenv from 'dotenv';
 dotenv.config({ override: true });
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { PBIMProject } from '../pbim/schema';
+import { knowledgeContextForLLM } from '../knowledge/nbr15575';
+import { buildInvariantSet } from '../interpreter/decoder';
+import { validateProject, ValidationReport } from '../interpreter/validator';
+import type { InvariantSet } from '../interpreter/invariants';
+
+/** ARQCdR: PBIM + camada semantica do interpretador. */
+export interface EnrichedPBIM {
+  project: PBIMProject;
+  interpreter: InvariantSet;
+  validation: ValidationReport;
+}
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -196,58 +207,78 @@ IMPORTANTE: Forneça avaliações numéricas e dados palpáveis em sua 'message'
 }
 
 export async function parseBriefingToPBIM(prompt: string): Promise<PBIMProject> {
-  const systemInstruction = `
-Você está trabalhando em uma plataforma web de vanguarda chamada Prompt-to-BIM (ARQCdR - Condenser AI).
-Objetivo: criar uma ferramenta sofisticada para arquitetos em que o usuário descreve um projeto por linguagem natural e o sistema gera, deterministicamente, um modelo BIM interno semântico altamente detalhado.
+  const enriched = await parseBriefingToPBIMEnriched(prompt);
+  return enriched.project;
+}
 
-Você atua como um 'Generative Architectural Algorithm':
-1. Setores e Programa: Respeite COMPLETAMENTE os pedidos do usuário ("4 quartos e sala", etc). Se ele pediu 4 quartos, crie espaços e paredes o suficiente para acomodar 4 quartos e 1 sala, mais recintos adicionais lógicos (banheiros, cozinhas, corredores).
-2. Geometria: O lote geralmente começa em [0,0] e se extende positivamente. Um lote de 15x30m iria de [0,0] a [15,0], [15,30], [0,30].
-3. Lógica Espacial e Ortogonalidade: Desenhe UMA PLANTA BAIXA COMPLETA E FUNCIONAL conectando 'walls' para fechar retângulos perfeitos (spaces). 
-   - Seja rigoroso na união de nós: Se uma parede termina em [5, 10, 0], a próxima DEVE começar em [5, 10, 0].
-   - Um projeto realista (como a casa de 4 quartos) exige entre 20 a 50 paredes para ficar completo e verossímil.
-   - Todo Space deve elencar os IDs das walls que o circundam, formando recintos fechados.
-4. Sistemas Numéricos e BIM:
-   - A espessura padrão (thickness) para paredes externas é 0.20m, e internas 0.15m. Parede estrutural = true se for carga.
-   - Altura padrão de nível é 3.0m.
-   - Aloque 'openings' (Portas e Janelas). Portas têm width 0.8-1.0, sill_height 0. Janelas têm sill_height 0.9-1.1, height 1.2-1.5. Crie portas e janelas para CADA cômodo, todas referenciadas aos IDs das walls corretas.
-5. Inclusão OBRIGATÓRIA de Slabs (Lajes/Pisos/Telhados):
-   - Você DEVE criar elementos arquitetônicos completos. Crie no array 'slabs' itens do tipo "Floor" que desenhem o piso dos ambientes, e itens do tipo "Roof" que cubram a edificação (elevação igual à altura das paredes).
-   - O boundary das 'slabs' deve envolver a estrutura criada.
-6. Nunca retorne erros humanos ou strings avulsas; retorne APENAS a estrutura JSON perfeita. Seja um Arquiteto e Engenheiro impecável.
+/**
+ * ARQCdR pipeline enriquecido:
+ *  1) decoder local detecta partido (compacto/L/U_patio/barra) + invariantes BR
+ *  2) Knowledge NBR + invariantes vao no system prompt do Gemini como restricoes
+ *  3) Gemini gera respeitando essas regras
+ *  4) Validator NBR roda no output (deterministico, sem LLM)
+ */
+export async function parseBriefingToPBIMEnriched(prompt: string): Promise<EnrichedPBIM> {
+  const invariantSet = buildInvariantSet(prompt);
+  const nbrContext = knowledgeContextForLLM();
+  const invariantContext = invariantSet.invariants.map(inv => {
+    if (inv.kind === "zone_placement") return `- Zoneamento: ${inv.sector} em ${inv.region} (eixo ${inv.axis} fracao ${inv.fraction.join("-")}) - ${inv.rationale}`;
+    if (inv.kind === "orientation")    return `- Orientacao: ${inv.appliesTo} prefere ${inv.preferred.join("/")} evita ${inv.forbidden.join("/")} - ${inv.rationale}`;
+    if (inv.kind === "void_placement") return `- Vazio central: minimo ${inv.areaMinM2}m2, aspect ${inv.aspectRatioMax}, ${inv.centroidHint} - ${inv.rationale}`;
+    if (inv.kind === "axis_placement") return `- Eixo: ${inv.direction}, largura ${inv.widthM}m - ${inv.rationale}`;
+    if (inv.kind === "proportion")     return `- Proporcao: aspect ${inv.aspectRatioMin}-${inv.aspectRatioMax} - ${inv.rationale}`;
+    return "";
+  }).join("\n");
+
+  const systemInstruction = `
+Voce e o BIMCompilerAgent do ARQCdR Condenser AI - plataforma prompt-to-BIM semantica para arquitetos brasileiros.
+${nbrContext}
+
+## PARTIDO DETECTADO PELO INTERPRETADOR
+Padrao: ${invariantSet.pattern}
+Narrativa: ${invariantSet.partiNarrative}
+
+## INVARIANTES ARQUITETONICAS A RESPEITAR
+${invariantContext}
+
+## REGRAS DE GERACAO
+1. Programa: respeite o numero exato de quartos/suites/banheiros pedidos. Use AREAS da knowledge base como referencia.
+2. Geometria: lote em [0,0]+. Walls com nos unidos exatamente.
+3. Paredes: thickness 0.20 externa, 0.15 interna, 0.15 molhada. structural=true em portantes. Altura 3.0m.
+4. Aberturas NBR 15575: porta interna 0.80, banheiro 0.70, externa 0.90, principal 1.00 (h 2.20). Janelas: quarto 1.20x1.20 peitoril 1.10; sala 2.00x1.20 peitoril 0.90; cozinha 1.20x1.00 peitoril 1.10; banheiro 0.60x0.60 peitoril 1.50. CADA comodo com porta + ao menos uma janela (exceto lavabo/circulacao/garagem).
+5. Setorizacao BR: social na frente, intimo nos fundos, servico lateral. Quartos L/NL, sociais N, cozinha S/SE, banheiro S/SO.
+6. Slabs: SEMPRE crie Floor envolvendo edificacao e Roof acima das paredes.
+7. Padrao deve aparecer na geometria: U_patio com vazio central; L com dois bracos ortogonais; barra longitudinal; compacto bloco unico.
+8. Use category correta: bedroom_couple, bedroom_single, bathroom, kitchen, living, dining, service_area, office, garage, circulation, lavabo, master_suite, bedroom.
+9. APENAS JSON valido aderente ao schema.
   `;
 
   const response = await getAIClient().models.generateContent({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3.1-pro-preview',
     contents: prompt,
     config: {
       responseMimeType: "application/json",
       responseSchema: pbimSchema,
       systemInstruction: systemInstruction,
-      temperature: 0.15
+      temperature: 0.15,
+      tools: [{ googleSearch: {} }]
     }
   });
 
   const text = response.text;
-  if (!text) {
-    throw new Error("No output generated by Gemini");
-  }
-
+  if (!text) throw new Error("No output generated by Gemini");
   const parsed = JSON.parse(text) as PBIMProject;
-  
-  // Enforce some defaults just in case
+
   parsed.schema_version = "0.1.0";
   parsed.units = "m";
   parsed.slabs = parsed.slabs || [];
   parsed.stairs = parsed.stairs || [];
   parsed.views = parsed.views || [];
   parsed.sheets = parsed.sheets || [];
-  
-  if (!parsed.project_id) {
-    parsed.project_id = crypto.randomUUID();
-  }
+  if (!parsed.project_id) parsed.project_id = crypto.randomUUID();
 
-  return parsed;
+  const validation = validateProject(parsed);
+  return { project: parsed, interpreter: invariantSet, validation };
 }
 
 export async function mutatePBIM(currentProject: PBIMProject, actionPrompt: string): Promise<PBIMProject> {
