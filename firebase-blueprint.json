@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "PBIMProject": {
+      "title": "PBIMProject",
+      "description": "A complete Parametric BIM project definition.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "The user ID who owns the project" },
+        "name": { "type": "string" },
+        "projectData": { "type": "object", "description": "Complete JSON structure of PBIMProject from the schema" },
+        "createdAt": { "type": "number", "description": "Server timestamp of creation" },
+        "updatedAt": { "type": "number", "description": "Server timestamp of last update" }
+      },
+      "required": ["userId", "projectData", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "projects/{projectId}": {
+      "schema": { "$ref": "#/entities/PBIMProject" },
+      "description": "Each document represents a complete PBIM project created by a user."
+    }
+  }
+}
