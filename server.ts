@@ -1,4 +1,5 @@
-import "dotenv/config";
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
@@ -34,9 +35,9 @@ async function startServer() {
       
       currentProjectState = pbimModel;
       res.json(pbimModel);
-    } catch (error) {
+    } catch (error: any) {
       console.error("[BIMCompiler Error]:", error);
-      res.json(currentProjectState);
+      res.status(500).json({ error: error.message || "Failed to generate project model" });
     }
   });
 
@@ -50,9 +51,9 @@ async function startServer() {
       const { analyzePBIM } = await import("./src/lib/ai_agents/gemini_agent");
       const report = await analyzePBIM(project);
       res.json(report);
-    } catch (error) {
+    } catch (error: any) {
       console.error("[ArchitecturalCritic Error]:", error);
-      res.status(500).json({ error: "Failed to generate critic report" });
+      res.status(500).json({ error: error.message || "Failed to generate critic report" });
     }
   });
 
@@ -72,9 +73,9 @@ async function startServer() {
       currentProjectState = updatedModel;
       
       res.json({ actionAlert: { explanation: "Model updated via Reborn Conversational AI." }, updatedModel: currentProjectState });
-    } catch (error) {
+    } catch (error: any) {
       console.error("[RebornAgent Error]:", error);
-      res.status(500).json({ error: "Failed to mutate PBIM" });
+      res.status(500).json({ error: error.message || "Failed to mutate PBIM" });
     }
   });
 

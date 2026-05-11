@@ -126,38 +126,42 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ project })
         })
-        .then(r => r.json())
-        .then(data => {
-          if (Array.isArray(data)) setCritics(data);
-          setIsCriticizing(false);
-        })
-        .catch(e => {
-          console.error(e);
-          setIsCriticizing(false);
-        });
+          .then(async r => {
+            const data = await r.json();
+            if (!r.ok) throw new Error(data.error || 'Failed to analyze project');
+            if (Array.isArray(data)) setCritics(data);
+            setIsCriticizing(false);
+          })
+          .catch(e => {
+            console.error(e);
+            setCritics([{ aspect: 'Error', message: e.message || 'System error during analysis.' }]);
+            setIsCriticizing(false);
+          });
       }
     }
   }, [project, viewMode, selectedObjectId, isGenerating]);
 
-  const handleGenerate = () => {
+  const handleGenerate = async () => {
     setIsGenerating(true);
     fetch('/api/projects/from-briefing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt })
     })
-      .then(r => r.json())
-      .then(data => {
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Failed to generate');
         setProject(data);
         setIsGenerating(false);
       })
       .catch(e => {
         console.error(e);
+        alert(e.message || 'API request failed');
         setIsGenerating(false);
       });
   };
 
-  const handleAction = () => {
+  const handleAction = async () => {
     if (!actionPrompt || !selectedObjectId || !project) return;
     setIsActing(true);
     setActionAlert(null);
@@ -166,8 +170,9 @@ export default function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: actionPrompt, targetId: selectedObjectId, currentProject: project })
     })
-      .then(r => r.json())
-      .then(data => {
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || 'Action failed');
         setActionAlert(data.actionAlert);
         if (data.updatedModel) {
           setProject(data.updatedModel);
@@ -177,6 +182,7 @@ export default function App() {
       })
       .catch(e => {
         console.error(e);
+        setActionAlert({ explanation: e.message || 'Error occurred.' });
         setIsActing(false);
       });
   };

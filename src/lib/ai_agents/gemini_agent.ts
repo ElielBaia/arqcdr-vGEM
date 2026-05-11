@@ -1,8 +1,20 @@
+import dotenv from 'dotenv';
+dotenv.config({ override: true });
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { PBIMProject } from '../pbim/schema';
 
-// We use the environment variable provided by AI Studio
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+let aiClient: GoogleGenAI | null = null;
+
+function getAIClient(): GoogleGenAI {
+  if (!aiClient) {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key || key === "MY_GEMINI_API_KEY") {
+      throw new Error("GEMINI_API_KEY environment variable is required and must be valid. Please configure it in the AI Studio Secrets panel.");
+    }
+    aiClient = new GoogleGenAI({ apiKey: key });
+  }
+  return aiClient;
+}
 
 const pbimSchema: Schema = {
   type: Type.OBJECT,
@@ -166,15 +178,14 @@ Critérios de Análise (Axis):
 IMPORTANTE: Forneça avaliações numéricas e dados palpáveis em sua 'message', deduzidos do JSON (por exemplo: "A área de 12m² para o quarto está 10% abaixo do padrão" ou "O vão de 6m exige atenção estrutural").
   `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+  const response = await getAIClient().models.generateContent({
+    model: 'gemini-2.5-flash',
     contents: JSON.stringify(project),
     config: {
       responseMimeType: "application/json",
       responseSchema: criticSchema,
       systemInstruction: systemInstruction,
-      temperature: 0.3,
-      tools: [{ googleSearch: {} }]
+      temperature: 0.3
     }
   });
 
@@ -206,15 +217,14 @@ Você atua como um 'Generative Architectural Algorithm':
 6. Nunca retorne erros humanos ou strings avulsas; retorne APENAS a estrutura JSON perfeita. Seja um Arquiteto e Engenheiro impecável.
   `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+  const response = await getAIClient().models.generateContent({
+    model: 'gemini-2.5-flash',
     contents: prompt,
     config: {
       responseMimeType: "application/json",
       responseSchema: pbimSchema,
       systemInstruction: systemInstruction,
-      temperature: 0.15,
-      tools: [{ googleSearch: {} }]
+      temperature: 0.15
     }
   });
 
@@ -257,8 +267,8 @@ REGRAS CRÍTICAS DE EDIÇÃO GEOMÉTRICA E BIM:
   // We serialize the current project and instruct the model to return the new JSON.
   const payload = `CURRENT_PBIM_MODEL:\n${JSON.stringify(currentProject)}\n\nUSER_MODIFICATION_REQUEST:\n${actionPrompt}`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3.1-pro-preview',
+  const response = await getAIClient().models.generateContent({
+    model: 'gemini-2.5-flash',
     contents: payload,
     config: {
       responseMimeType: "application/json",
